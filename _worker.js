@@ -539,12 +539,15 @@ export default {
 				const encoded = toBase64(nodesContent);
 				return new Response(encoded + '\n', { status: 200, headers: responseHeaders });
 			} else {
-				// 订阅转换
-				const 订阅转换URL = `https://SUBAPI.cmliussss.net/sub?target=${订阅类型}&url=${encodeURIComponent(new URL(req.url).origin + '/sub?uuid=' + userConfig.uuid + '&target=mixed')}&emoji=false`;
+				// 使用外部订阅转换后端
+				const encodedNodes = toBase64(nodesContent);
+				// 直接传递Base64编码的节点内容
+				const 订阅转换URL = `https://subapi.vpnjacky.dpdns.org/sub?target=${订阅类型}&url=${encodeURIComponent(encodedNodes)}&emoji=false&insert=false`;
 				try {
 					const response = await fetch(订阅转换URL, { 
 						headers: { 
-							'User-Agent': 'Subconverter for ' + 订阅类型 
+							'User-Agent': 'Subconverter for ' + 订阅类型,
+							'Accept': '*/*'
 						}
 					});
 					if (response.ok) {
@@ -557,10 +560,12 @@ export default {
 						}
 						return new Response(转换后内容, { status: 200, headers: responseHeaders });
 					} else {
-						return text('订阅转换失败: ' + response.statusText, 500);
+						const errorText = await response.text().catch(() => '');
+						return text('订阅转换失败: ' + response.statusText + '\n' + errorText + '\nURL: ' + 订阅转换URL, 500);
 					}
 				} catch (error) {
-					return text('订阅转换失败: ' + error.message, 500);
+					// 如果订阅转换失败，返回原始节点内容
+					return new Response(encodedNodes + '\n', { status: 200, headers: responseHeaders });
 				}
 			}
 		}
