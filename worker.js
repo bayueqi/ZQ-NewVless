@@ -3,20 +3,20 @@ import { connect } from 'cloudflare:sockets';
 export default {
 	async fetch(req, env) {
 		const getUserConfig = async () => {
-			try {
-				const config = await env.NewVless?.get('user_config', 'json');
-				const merged = config || { uuid: 'ef9d104e-ca0e-4202-ba4b-a0afb969c747', domain: '', port: '443', s5: '', proxyIp: '', domains: [], ports: [] };
-				if (!Array.isArray(merged.domains)) merged.domains = [];
-				if (!Array.isArray(merged.ports)) merged.ports = [];
-				const d = (merged.domain || '').trim();
-				if (d && !merged.domains.includes(d)) merged.domains.push(d);
-				const pNum = Math.max(1, Math.min(65535, parseInt(merged.port || '443', 10) || 443));
-				if (!merged.ports.some(x => +x === pNum)) merged.ports.push(pNum);
-				return merged;
-			} catch {
-				return { uuid: 'ef9d104e-ca0e-4202-ba4b-a0afb969c747', domain: '', port: '443', s5: '', proxyIp: '', domains: [], ports: [443] };
-			}
-		};
+		try {
+			const config = await env.NewVless?.get('user_config', 'json');
+			const merged = config || { uuid: 'ef9d104e-ca0e-4202-ba4b-a0afb969c747', domain: '', port: '443', s5: '', proxyIp: '', domains: [], ports: [] };
+			merged.domains = Array.isArray(merged.domains) ? merged.domains : [];
+			merged.ports = Array.isArray(merged.ports) ? merged.ports : [];
+			const d = (merged.domain || '').trim();
+			if (d && !merged.domains.includes(d)) merged.domains.push(d);
+			const pNum = Math.max(1, Math.min(65535, parseInt(merged.port || '443', 10) || 443));
+			if (!merged.ports.some(x => +x === pNum)) merged.ports.push(pNum);
+			return merged;
+		} catch {
+			return { uuid: 'ef9d104e-ca0e-4202-ba4b-a0afb969c747', domain: '', port: '443', s5: '', proxyIp: '', domains: [], ports: [443] };
+		}
+	};
 
 		const buildVlessUri = (rawPathQuery, uuid, label, workerHost, preferredDomain, port, s5, proxyIp) => {
 			let path = rawPathQuery;
@@ -30,12 +30,21 @@ export default {
 		};
 
 		const buildVariants = (s5, proxyIp) => {
-			const v = [{ label: '仅直连', raw: '/?mode=direct' }];
-			if (s5) v.push({ label: '仅SOCKS5', raw: `/?mode=s5&s5=${s5}` }, { label: '直连优先，回退SOCKS5', raw: `/?mode=auto&direct&s5=${s5}` }, { label: 'SOCKS5优先，回退直连', raw: `/?mode=auto&s5=${s5}&direct` });
-			if (proxyIp) v.push({ label: '直连优先，回退ProxyIP', raw: `/?mode=auto&direct&proxyip=${proxyIp}` }, { label: 'ProxyIP优先，回退直连', raw: `/?mode=auto&proxyip=${proxyIp}&direct` });
-			if (s5 && proxyIp) v.push({ label: 'SOCKS5优先，回退ProxyIP', raw: `/?mode=auto&s5=${s5}&proxyip=${proxyIp}` }, { label: 'ProxyIP优先，回退SOCKS5', raw: `/?mode=auto&proxyip=${proxyIp}&s5=${s5}` }, { label: '直连→SOCKS5→ProxyIP', raw: `/?mode=auto&direct&s5=${s5}&proxyip=${proxyIp}` }, { label: '直连→ProxyIP→SOCKS5', raw: `/?mode=auto&direct&proxyip=${proxyIp}&s5=${s5}` }, { label: 'SOCKS5→直连→ProxyIP', raw: `/?mode=auto&s5=${s5}&direct&proxyip=${proxyIp}` }, { label: 'SOCKS5→ProxyIP→直连', raw: `/?mode=auto&s5=${s5}&proxyip=${proxyIp}&direct` }, { label: 'ProxyIP→直连→SOCKS5', raw: `/?mode=auto&proxyip=${proxyIp}&direct&s5=${s5}` }, { label: 'ProxyIP→SOCKS5→直连', raw: `/?mode=auto&proxyip=${proxyIp}&s5=${s5}&direct` });
-			return v;
-		};
+		const v = [{ label: '仅直连', raw: '/?mode=direct' }];
+		const s5Enc = s5 ? encodeURIComponent(s5) : '';
+		const proxyIpEnc = proxyIp ? encodeURIComponent(proxyIp) : '';
+		if (s5) {
+			v.push({ label: '仅SOCKS5', raw: `/?mode=s5&s5=${s5Enc}` });
+			v.push({ label: '直连+SOCKS5', raw: `/?mode=parallel&direct&s5=${s5Enc}` });
+		}
+		if (proxyIp) {
+			v.push({ label: '直连+ProxyIP', raw: `/?mode=parallel&direct&proxyip=${proxyIpEnc}` });
+		}
+		if (s5 && proxyIp) {
+			v.push({ label: '直连+SOCKS5+ProxyIP', raw: `/?mode=parallel&direct&s5=${s5Enc}&proxyip=${proxyIpEnc}` });
+		}
+		return v;
+	};
 
 		const getDomainPortLists = (request, cfg) => {
 			const workerHost = new URL(request.url).hostname;
@@ -79,15 +88,14 @@ export default {
 
 			const getOrder = () => {
 				if (mode === 'proxy') return ['direct', 'proxy'];
-				if (mode !== 'auto') return [mode];
-				const order = [];
-				const searchStr = u.search.slice(1);
-				for (const pair of searchStr.split('&')) {
+				if (mode === 's5') return socks5 ? ['s5'] : ['direct'];
+				const order = u.search.slice(1).split('&').map(pair => {
 					const key = pair.split('=')[0];
-					if (key === 'direct') order.push('direct');
-					else if (key === 's5') order.push('s5');
-					else if (key === 'proxyip') order.push('proxy');
-				}
+					if (key === 'direct') return 'direct';
+					if (key === 's5') return 's5';
+					if (key === 'proxyip') return 'proxy';
+					return null;
+				}).filter(Boolean);
 				return order.length ? order : ['direct'];
 			};
 
@@ -220,45 +228,100 @@ export default {
 						udpWriter = writable.getWriter();
 						return udpWriter.write(payload);
 					}
-					let sock = null;
-					for (const method of getOrder()) {
+					const connectDirect = async (hostname, portNum, data) => {
+						const sock = connect({ hostname: hostname, port: portNum });
+						await sock.opened;
+						const writer = sock.writable.getWriter();
+						await writer.write(data);
+						writer.releaseLock();
+						return sock;
+					};
+					const connectStreams = async (remoteSocket, webSocket, headerData, retryFunc) => {
+					let header = headerData, hasData = false, dataPromiseResolve;
+					const dataPromise = new Promise(resolve => dataPromiseResolve = resolve);
+					const timeoutId = setTimeout(() => {
+						if (!hasData) dataPromiseResolve(false);
+					}, 100);
+					remoteSocket.readable.pipeTo(
+						new WritableStream({
+							async write(chunk, controller) {
+								clearTimeout(timeoutId);
+								hasData = true;
+								dataPromiseResolve(true);
+								if (webSocket.readyState !== 1) controller.error('ws.readyState is not open');
+								if (header) {
+									const response = new Uint8Array(header.length + chunk.byteLength);
+									response.set(header, 0);
+									response.set(chunk, header.length);
+									webSocket.send(response.buffer);
+									header = null;
+								} else {
+									webSocket.send(chunk);
+								}
+							},
+							abort() {}
+						})
+					).catch(() => {
+						try { webSocket.readyState === 1 && webSocket.close(); } catch {}
+					});
+					const receivedData = await dataPromise;
+					if (!receivedData && retryFunc) await retryFunc();
+				};
+					const connectParallel = async () => {
+					let domainProxyMapping = {};
+					try {
+						const mappingStr = await env.NewVless?.get('domain_proxy_mapping', 'json');
+						if (mappingStr) domainProxyMapping = mappingStr;
+					} catch {}
+					const tryConnect = async (type) => {
 						try {
-							if (method === 'direct') {
-								sock = connect({ hostname: addr, port });
-								await sock.opened;
-								break;
-							} else if (method === 's5' && socks5) {
-								sock = await socks5Connect(addr, port);
-								break;
-							} else if (method === 'proxy' && PROXY_IP) {
-								const [ph, pp = port] = PROXY_IP.split(':');
-								sock = connect({ hostname: ph, port: +pp || port });
-								await sock.opened;
-								break;
+							if (type === 'direct') return await connectDirect(addr, port, payload);
+							if (type === 's5' && socks5) {
+								const sock = await socks5Connect(addr, port);
+								const w = sock.writable.getWriter();
+								await w.write(payload);
+								w.releaseLock();
+								return sock;
+							}
+							if (type === 'proxy') {
+								let proxyIp = PROXY_IP;
+								if (addr && domainProxyMapping[addr]) proxyIp = domainProxyMapping[addr];
+								if (proxyIp) {
+									const [ph, pp = port] = proxyIp.split(':');
+									return await connectDirect(ph, +pp || port, payload);
+								}
 							}
 						} catch {}
+						return null;
+					};
+					const order = getOrder();
+					if (!order.length) return;
+					const tryNext = async (index) => {
+						if (index >= order.length) return null;
+						const sock = await tryConnect(order[index]);
+						return sock || await tryNext(index + 1);
+					};
+					const primary = await tryConnect(order[0]);
+					if (!primary) {
+						const backup = await tryNext(1);
+						if (backup) {
+							remote = backup;
+							await connectStreams(backup, ws, header, null);
+						}
+						return;
 					}
-
-					if (!sock) return;
-
-					remote = sock;
-					const w = sock.writable.getWriter();
-					await w.write(payload);
-					w.releaseLock();
-
-					let sent = false;
-					sock.readable.pipeTo(new WritableStream({
-						write(chunk) {
-							if (ws.readyState === 1) {
-								ws.send(sent ? chunk : new Uint8Array([...header, ...
-									new Uint8Array(chunk)
-								]));
-								sent = true;
-							}
-						},
-						close: () => ws.readyState === 1 && ws.close(),
-						abort: () => ws.readyState === 1 && ws.close()
-					})).catch(() => {});
+					remote = primary;
+					const retryFunc = order.length > 1 ? async () => {
+						const backup = await tryNext(1);
+						if (backup) {
+							try { primary.close(); } catch {}
+							remote = backup;
+							await connectStreams(backup, ws, header, null);
+						}
+					} : null;
+					await connectStreams(primary, ws, header, retryFunc);
+				};
+					await connectParallel();
 				}
 			})).catch(() => {});
 
@@ -293,18 +356,28 @@ export default {
 					if (urlUUID !== userConfig.uuid && urlUUID !== incoming.uuid) {
 						return json({ error: 'UUID错误，无权访问' }, 403);
 					}
-					let domains = [];
-					if (Array.isArray(incoming.domains)) domains = incoming.domains.map(x => (x || '').trim()).filter(Boolean);
-					if (incoming.domain) { const d = (incoming.domain + '').trim(); if (d && !domains.includes(d)) domains.unshift(d); }
-					let ports = [];
-					if (Array.isArray(incoming.ports)) ports = incoming.ports.map(x => Math.max(1, Math.min(65535, parseInt((x + ''), 10) || 443)));
-					if (incoming.port) { const pn = Math.max(1, Math.min(65535, parseInt((incoming.port + ''), 10) || 443)); if (!ports.includes(pn)) ports.unshift(pn); }
-					domains = Array.from(new Set(domains));
-					ports = Array.from(new Set(ports));
-					if (domains.length === 0) domains.push('');
-					if (ports.length === 0) ports.push(443);
+					let domains = Array.isArray(incoming.domains) ? incoming.domains.map(x => (x || '').trim()).filter(Boolean) : [];
+					if (incoming.domain) {
+						const d = (incoming.domain + '').trim();
+						if (d && !domains.includes(d)) domains.unshift(d);
+					}
+					let ports = Array.isArray(incoming.ports) ? incoming.ports.map(x => Math.max(1, Math.min(65535, parseInt((x + ''), 10) || 443))) : [];
+					if (incoming.port) {
+						const pn = Math.max(1, Math.min(65535, parseInt((incoming.port + ''), 10) || 443));
+						if (!ports.includes(pn)) ports.unshift(pn);
+					}
+					domains = [...new Set(domains)];
+					ports = [...new Set(ports)];
+					if (!domains.length) domains.push('');
+					if (!ports.length) ports.push(443);
 					const normalized = { uuid: incoming.uuid, domain: (domains[0] || ''), port: String(ports[0] || 443), s5: incoming.s5 || '', proxyIp: incoming.proxyIp || '', domains: domains.filter(Boolean), ports };
-					if (env.NewVless) await env.NewVless.put('user_config', JSON.stringify(normalized));
+					if (env.NewVless) {
+						await env.NewVless.put('user_config', JSON.stringify(normalized));
+						if (normalized.domain && normalized.proxyIp) {
+							const domainProxyMapping = { [normalized.domain]: normalized.proxyIp };
+							await env.NewVless.put('domain_proxy_mapping', JSON.stringify(domainProxyMapping));
+						}
+					}
 					return json({ success: true, message: '配置保存成功' });
 				} catch (error) {
 					return json({ error: '配置保存失败' }, 500);
@@ -365,21 +438,13 @@ export default {
 			const variants = buildVariants(userConfig.s5, userConfig.proxyIp);
 			const ua = (req.headers.get('User-Agent') || '').toLowerCase();
 			const isSubConverterRequest = url.searchParams.has('b64') || url.searchParams.has('base64') || req.headers.get('subconverter-request') || req.headers.get('subconverter-version') || ua.includes('subconverter');
-			const 订阅类型 = isSubConverterRequest
-				? 'mixed'
-				: url.searchParams.has('target')
-					? url.searchParams.get('target')
-					: url.searchParams.has('clash') || ua.includes('clash') || ua.includes('meta') || ua.includes('mihomo')
-						? 'clash'
-						: url.searchParams.has('sb') || url.searchParams.has('singbox') || ua.includes('singbox') || ua.includes('sing-box')
-							? 'singbox'
-							: url.searchParams.has('surge') || ua.includes('surge')
-								? 'surge&ver=4'
-								: url.searchParams.has('quanx') || ua.includes('quantumult')
-									? 'quanx'
-									: url.searchParams.has('loon') || ua.includes('loon')
-										? 'loon'
-										: 'mixed';
+			const 订阅类型 = isSubConverterRequest ? 'mixed' : 
+					url.searchParams.has('target') ? url.searchParams.get('target') :
+					url.searchParams.has('clash') || ua.includes('clash') || ua.includes('meta') || ua.includes('mihomo') ? 'clash' :
+					url.searchParams.has('sb') || url.searchParams.has('singbox') || ua.includes('singbox') || ua.includes('sing-box') ? 'singbox' :
+					url.searchParams.has('surge') || ua.includes('surge') ? 'surge&ver=4' :
+					url.searchParams.has('quanx') || ua.includes('quantumult') ? 'quanx' :
+					url.searchParams.has('loon') || ua.includes('loon') ? 'loon' : 'mixed';
 			const out = [];
 			for (const d of domains) {
 				for (const p of ports) {
@@ -395,37 +460,32 @@ export default {
 				"Content-Disposition": "attachment; filename=newvless"
 			};
 			
-			// 处理不同类型的订阅
 			if (订阅类型 === 'mixed') {
-				// 标准格式，Base64编码
-				const encoded = btoa(unescape(encodeURIComponent(nodesContent)));
-				return new Response(encoded + '\n', { status: 200, headers: responseHeaders });
-			} else {
-				const encodedNodes = btoa(unescape(encodeURIComponent(nodesContent)));
-				const 订阅转换URL = `https://subapi.vpnjacky.dpdns.org/sub?target=${订阅类型}&url=${encodeURIComponent(encodedNodes)}&emoji=false&insert=false`;
-				try {
-					const response = await fetch(订阅转换URL, { 
-						headers: { 
-							'User-Agent': 'Subconverter for ' + 订阅类型,
-							'Accept': '*/*'
+					const encoded = btoa(unescape(encodeURIComponent(nodesContent)));
+					return new Response(encoded + '\n', { status: 200, headers: responseHeaders });
+				} else {
+					const encodedNodes = btoa(unescape(encodeURIComponent(nodesContent)));
+					const 订阅转换URL = `https://subapi.vpnjacky.dpdns.org/sub?target=${订阅类型}&url=${encodeURIComponent(encodedNodes)}&emoji=false&insert=false`;
+					try {
+						const response = await fetch(订阅转换URL, { 
+							headers: { 
+								'User-Agent': 'Subconverter for ' + 订阅类型,
+								'Accept': '*/*'
+							}
+						});
+						if (response.ok) {
+							const 转换后内容 = await response.text();
+							if (订阅类型 === 'clash') responseHeaders["content-type"] = 'application/x-yaml; charset=utf-8';
+							else if (订阅类型 === 'singbox') responseHeaders["content-type"] = 'application/json; charset=utf-8';
+							return new Response(转换后内容, { status: 200, headers: responseHeaders });
+						} else {
+							const errorText = await response.text().catch(() => '');
+							return text('订阅转换失败: ' + response.statusText + '\n' + errorText + '\nURL: ' + 订阅转换URL, 500);
 						}
-					});
-					if (response.ok) {
-						const 转换后内容 = await response.text();
-						if (订阅类型 === 'clash') {
-							responseHeaders["content-type"] = 'application/x-yaml; charset=utf-8';
-						} else if (订阅类型 === 'singbox') {
-							responseHeaders["content-type"] = 'application/json; charset=utf-8';
-						}
-						return new Response(转换后内容, { status: 200, headers: responseHeaders });
-					} else {
-						const errorText = await response.text().catch(() => '');
-						return text('订阅转换失败: ' + response.statusText + '\n' + errorText + '\nURL: ' + 订阅转换URL, 500);
+					} catch {
+						return new Response(encodedNodes + '\n', { status: 200, headers: responseHeaders });
 					}
-				} catch (error) {
-					return new Response(encodedNodes + '\n', { status: 200, headers: responseHeaders });
 				}
-			}
 		}
 
 		if (url.pathname === '/' || url.pathname === '/index.html') {
