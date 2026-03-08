@@ -68,20 +68,10 @@
 
 * `/?mode=direct`（仅直连）
 * `/?mode=s5&s5=user:pass@host:port`（仅SOCKS5）
-* `/?mode=auto&direct&s5=user:pass@host:port`（直连优先，回退SOCKS5）
-* `/?mode=auto&s5=user:pass@host:port&direct`（SOCKS5优先，回退直连）
-* `/?mode=auto&direct&proxyip=host:port`（直连优先，回退ProxyIP）
-* `/?mode=auto&proxyip=host:port&direct`（ProxyIP优先，回退直连）
-* `/?mode=auto&s5=user:pass@host:port&proxyip=host:port`（SOCKS5优先，回退ProxyIP）
-* `/?mode=auto&proxyip=host:port&s5=user:pass@host:port`（ProxyIP优先，回退SOCKS5）
-* `/?mode=auto&direct&s5=user:pass@host:port&proxyip=host:port`（三者：直连→SOCKS5→ProxyIP）
-* `/?mode=auto&direct&proxyip=host:port&s5=user:pass@host:port`（三者：直连→ProxyIP→SOCKS5）
-* `/?mode=auto&s5=user:pass@host:port&direct&proxyip=host:port`（三者：SOCKS5→直连→ProxyIP）
-* `/?mode=auto&s5=user:pass@host:port&proxyip=host:port&direct`（三者：SOCKS5→ProxyIP→直连）
-* `/?mode=auto&proxyip=host:port&direct&s5=user:pass@host:port`（三者：ProxyIP→直连→SOCKS5）
-* `/?mode=auto&proxyip=host:port&s5=user:pass@host:port&direct`（三者：ProxyIP→SOCKS5→直连）
+* `/?mode=parallel&direct&s5=user:pass@host:port`(直连与SOCKS5)
+* `/?mode=parallel&direct&proxyip=host:port`(直连与proxyip)
+* `/?mode=parallel&direct&s5=user:pass@host:port&proxyip=host:port`(直连，SOCKS5与proxyip)
 
-> 注意：不支持“仅 ProxyIP”模式
 ![手搓](src/1.png)
 ![手搓](src/2.png)
 
